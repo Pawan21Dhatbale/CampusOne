@@ -16,7 +16,7 @@ class EmailService:
         Dispatches account activation / email verification instructions.
         Integrates with configured institutional SMTP and Supabase endpoints.
         """
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+        frontend_url = os.getenv("FRONTEND_URL") or (f"https://{os.getenv('VERCEL_URL')}" if os.getenv("VERCEL_URL") else "http://localhost:5173")
         verification_link = f"{frontend_url}/verify-email?token={token}"
 
         subject = "Verify Your SmartAttend Account"
@@ -66,7 +66,7 @@ class EmailService:
     @staticmethod
     def send_password_reset_email(to_email: str, token: str, full_name: str = "") -> bool:
         """Dispatches password reset instructions via SMTP."""
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+        frontend_url = os.getenv("FRONTEND_URL") or (f"https://{os.getenv('VERCEL_URL')}" if os.getenv("VERCEL_URL") else "http://localhost:5173")
         reset_link = f"{frontend_url}/login?reset_token={token}"
 
         subject = "Reset Your SmartAttend Password"
