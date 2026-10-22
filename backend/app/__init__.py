@@ -118,6 +118,15 @@ def create_app(config_name=None):
 
     @app.errorhandler(500)
     def handle_server_error(e):
+        import traceback
+        err_msg = str(e)
+        app.logger.error("Internal Server Error (500):\n%s", traceback.format_exc())
+        if app.config.get("DEBUG"):
+            return error_response(
+                message=f"Internal Server Error: {err_msg}",
+                error_code="SERVER_ERROR",
+                status_code=500,
+            )
         return error_response(message="An internal server error occurred.", error_code="SERVER_ERROR", status_code=500)
 
     return app

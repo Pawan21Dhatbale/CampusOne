@@ -2,13 +2,26 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { facultyApi } from '../../api/facultyApi';
 import { LoadingSpinner } from '../../components/LoadingSpinner';
-import { Calendar, Clock, MapPin, CheckCircle2, ArrowRight } from 'lucide-react';
+import { CsvImportModal } from '../../components/CsvImportModal';
+import { FacultySwapModal } from '../../components/FacultySwapModal';
+import { 
+  Calendar, 
+  Clock, 
+  MapPin, 
+  CheckCircle2, 
+  ArrowRight, 
+  Upload, 
+  ArrowLeftRight 
+} from 'lucide-react';
 
 const daysOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 export const FacultyTimetablePage = () => {
   const [timetable, setTimetable] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
+  const [isSwapModalOpen, setIsSwapModalOpen] = useState(false);
+  const [selectedLectureForSwap, setSelectedLectureForSwap] = useState(null);
   const navigate = useNavigate();
 
   const todayDate = new Date().toISOString().split('T')[0];
@@ -32,17 +45,43 @@ export const FacultyTimetablePage = () => {
     }
   };
 
+  const handleOpenSwapForLecture = (lecture) => {
+    setSelectedLectureForSwap(lecture);
+    setIsSwapModalOpen(true);
+  };
+
   if (loading) return <LoadingSpinner text="Retrieving personal timetable..." />;
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white sm:text-2xl">
-          Personal Lecture Timetable
-        </h1>
-        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-          Assigned scheduled classes. Lectures scheduled for today are highlighted for one-click attendance.
-        </p>
+      {/* Header with Import and Swap actions */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white sm:text-2xl">
+            Personal Lecture Timetable
+          </h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            Assigned scheduled classes. Lectures scheduled for today are highlighted for one-click attendance.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsCsvModalOpen(true)}
+            className="inline-flex items-center gap-2 rounded-xl border border-indigo-600 bg-indigo-50 px-3.5 py-2.5 text-xs font-bold text-indigo-700 hover:bg-indigo-100 transition dark:bg-indigo-950/40 dark:border-indigo-500 dark:text-indigo-300"
+          >
+            <Upload className="h-4 w-4" /> Import Timetable (CSV)
+          </button>
+          <button
+            onClick={() => {
+              setSelectedLectureForSwap(null);
+              setIsSwapModalOpen(true);
+            }}
+            className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white shadow-md shadow-indigo-500/20 hover:bg-indigo-700 transition"
+          >
+            <ArrowLeftRight className="h-4 w-4" /> Swap / Substitute Lecture
+          </button>
+        </div>
       </div>
 
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
@@ -81,7 +120,7 @@ export const FacultyTimetablePage = () => {
                   dayEntries.map((e) => (
                     <div
                       key={e.id}
-                      className="rounded-xl border border-slate-100 bg-slate-50/70 p-3 text-xs dark:border-slate-800 dark:bg-slate-800/40"
+                      className="group rounded-xl border border-slate-100 bg-slate-50/70 p-3 text-xs dark:border-slate-800 dark:bg-slate-800/40"
                     >
                       <div className="flex items-start justify-between">
                         <div>
@@ -108,28 +147,42 @@ export const FacultyTimetablePage = () => {
                         </span>
                       </div>
 
-                      {/* One-click attendance launch if today */}
-                      {isToday && (
-                        <div className="mt-3 pt-2 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between">
-                          {e.attendance_taken_today ? (
-                            <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-                              <CheckCircle2 className="h-3.5 w-3.5" /> Marked
-                            </span>
-                          ) : (
-                            <span className="text-[11px] font-semibold text-amber-600 dark:text-amber-400">
-                              Not Marked
-                            </span>
-                          )}
+                      {/* Quick swap button and attendance action */}
+                      <div className="mt-3 pt-2 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenSwapForLecture(e)}
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 transition"
+                          title="Busy? Swap this lecture with a colleague"
+                        >
+                          <ArrowLeftRight className="h-3 w-3 text-indigo-600 dark:text-indigo-400" />
+                          <span>Swap</span>
+                        </button>
 
-                          <button
-                            onClick={() => navigate(`/faculty/attendance/${e.id}?date=${todayDate}`)}
-                            className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-indigo-700 shadow-sm transition"
-                          >
-                            <span>{e.attendance_taken_today ? 'View' : 'Take'}</span>
-                            <ArrowRight className="h-3 w-3" />
-                          </button>
-                        </div>
-                      )}
+                        {isToday ? (
+                          <div className="flex items-center gap-2">
+                            {e.attendance_taken_today ? (
+                              <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                                <CheckCircle2 className="h-3.5 w-3.5" /> Marked
+                              </span>
+                            ) : (
+                              <span className="text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+                                Not Marked
+                              </span>
+                            )}
+
+                            <button
+                              onClick={() => navigate(`/faculty/attendance/${e.id}?date=${todayDate}`)}
+                              className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-indigo-700 shadow-sm transition"
+                            >
+                              <span>{e.attendance_taken_today ? 'View' : 'Take'}</span>
+                              <ArrowRight className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-slate-400 font-medium">Scheduled</span>
+                        )}
+                      </div>
                     </div>
                   ))
                 )}
@@ -138,6 +191,30 @@ export const FacultyTimetablePage = () => {
           );
         })}
       </div>
+
+      {/* Faculty Timetable CSV Import Modal */}
+      <CsvImportModal
+        isOpen={isCsvModalOpen}
+        onClose={() => setIsCsvModalOpen(false)}
+        title="Import Personal Lecture Timetable (CSV)"
+        description="Upload a CSV file containing your scheduled classes. Missing faculty field will automatically be assigned to you."
+        sampleHeaders={['class_code', 'subject_code', 'day_of_week', 'start_time', 'end_time', 'room_number']}
+        sampleRows={[
+          ['CS-3', 'CS301', 'Monday', '09:00', '10:00', 'Room 301'],
+          ['CS-3', 'CS302', 'Wednesday', '11:15', '12:15', 'Lab 2'],
+        ]}
+        sampleFilename="faculty_timetable_template.csv"
+        onUpload={(formData) => facultyApi.importTimetableCsv(formData)}
+        onSuccess={() => loadTimetable()}
+      />
+
+      {/* Lecture Swap Modal */}
+      <FacultySwapModal
+        isOpen={isSwapModalOpen}
+        onClose={() => setIsSwapModalOpen(false)}
+        preselectedLecture={selectedLectureForSwap}
+        onSwapUpdated={() => loadTimetable()}
+      />
     </div>
   );
 };

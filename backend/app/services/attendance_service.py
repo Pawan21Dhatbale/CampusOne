@@ -57,11 +57,6 @@ class AttendanceService:
         if not entry:
             return None, "Timetable entry not found", 404
 
-        # Validate faculty authorization
-        if not is_admin:
-            if not entry.faculty or entry.faculty.user_id != faculty_user_id:
-                return None, "Unauthorized: You are not assigned to conduct this lecture.", 403
-
         # Parse lecture date
         try:
             if isinstance(lecture_date_str, str):
@@ -72,6 +67,24 @@ class AttendanceService:
                 return None, "Invalid date format. Expected YYYY-MM-DD", 400
         except ValueError:
             return None, "Invalid date format. Expected YYYY-MM-DD", 400
+
+        # Validate faculty authorization (assigned faculty OR accepted substitute/swap for this date)
+        if not is_admin:
+            is_assigned = (entry.faculty and entry.faculty.user_id == faculty_user_id)
+            if not is_assigned:
+                from app.models.timetable import LectureSwap
+                from app.models.user import FacultyProfile
+                fac_profile = FacultyProfile.query.filter_by(user_id=faculty_user_id).first()
+                has_swap = False
+                if fac_profile:
+                    has_swap = LectureSwap.query.filter_by(
+                        timetable_entry_id=entry.id,
+                        substitute_faculty_id=fac_profile.id,
+                        target_date=target_date,
+                        status="ACCEPTED"
+                    ).first() is not None
+                if not has_swap:
+                    return None, "Unauthorized: You are not assigned or authorized to conduct this lecture.", 403
 
         # Prevent duplicate session for the same timetable entry and date
         existing_session = AttendanceSession.query.filter_by(

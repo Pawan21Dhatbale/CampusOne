@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { adminApi } from '../../api/adminApi';
 import { Modal } from '../../components/Modal';
+import { CsvImportModal } from '../../components/CsvImportModal';
 import { LoadingSpinner } from '../../components/LoadingSpinner';
-import { Plus, Search, UserCheck, AlertCircle } from 'lucide-react';
+import { Plus, Search, UserCheck, AlertCircle, Upload } from 'lucide-react';
 
 export const FacultyManagementPage = () => {
   const [faculty, setFaculty] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
   const [modalLoading, setModalLoading] = useState(false);
   const [modalError, setModalError] = useState('');
 
@@ -83,12 +85,20 @@ export const FacultyManagementPage = () => {
           </p>
         </div>
 
-        <button
-          onClick={() => setIsModalOpen(true)}
-          className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white shadow-md shadow-indigo-500/20 hover:bg-indigo-700 transition"
-        >
-          <Plus className="h-4 w-4" /> Add Faculty Member
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsCsvModalOpen(true)}
+            className="inline-flex items-center gap-2 rounded-xl border border-indigo-600 bg-indigo-50 px-3.5 py-2.5 text-xs font-bold text-indigo-700 hover:bg-indigo-100 transition dark:bg-indigo-950/40 dark:border-indigo-500 dark:text-indigo-300"
+          >
+            <Upload className="h-4 w-4" /> Import CSV
+          </button>
+          <button
+            onClick={() => setIsModalOpen(true)}
+            className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white shadow-md shadow-indigo-500/20 hover:bg-indigo-700 transition"
+          >
+            <Plus className="h-4 w-4" /> Add Faculty Member
+          </button>
+        </div>
       </div>
 
       {/* Search Bar */}
@@ -271,6 +281,22 @@ export const FacultyManagementPage = () => {
           </div>
         </form>
       </Modal>
+
+      {/* CSV Bulk Import Modal */}
+      <CsvImportModal
+        isOpen={isCsvModalOpen}
+        onClose={() => setIsCsvModalOpen(false)}
+        title="Bulk Import Faculty via CSV"
+        description="Upload a CSV file containing faculty members. New faculty user accounts and academic profiles will be generated automatically."
+        sampleHeaders={['full_name', 'email', 'faculty_id', 'department', 'designation', 'phone', 'password']}
+        sampleRows={[
+          ['Dr. Rajesh Kulkarni', 'rkulkarni@mitaoe.ac.in', 'FAC202509', 'Computer Science', 'Associate Professor', '9876543210', 'Faculty@123'],
+          ['Prof. Sunita Patil', 'spatil@mitaoe.ac.in', 'FAC202510', 'Computer Science', 'Assistant Professor', '9876543211', 'Faculty@123'],
+        ]}
+        sampleFilename="faculty_import_template.csv"
+        onUpload={(formData) => adminApi.importFacultyCsv(formData)}
+        onSuccess={() => loadFaculty()}
+      />
     </div>
   );
 };

@@ -22,12 +22,12 @@ const roleMenus = {
     { label: 'Overview', path: '/admin', icon: LayoutDashboard },
     { label: 'Students', path: '/admin/students', icon: GraduationCap },
     { label: 'Faculty', path: '/admin/faculty', icon: Users },
-    { label: 'Timetable', path: '/admin/timetable', icon: CalendarDays },
+    { label: 'Timetable & Swaps', path: '/admin/timetable', icon: CalendarDays },
     { label: 'Attendance Records', path: '/admin/attendance', icon: FileSpreadsheet },
   ],
   faculty: [
     { label: 'Overview', path: '/faculty', icon: LayoutDashboard },
-    { label: 'My Timetable', path: '/faculty/timetable', icon: CalendarDays },
+    { label: 'Timetable & Swaps', path: '/faculty/timetable', icon: CalendarDays },
     { label: 'Attendance History', path: '/faculty/history', icon: History },
   ],
   student: [

@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { adminApi } from '../../api/adminApi';
 import { Modal } from '../../components/Modal';
+import { CsvImportModal } from '../../components/CsvImportModal';
 import { LoadingSpinner } from '../../components/LoadingSpinner';
-import { Plus, Search, UserCheck, UserX, AlertCircle } from 'lucide-react';
+import { Plus, Search, UserCheck, UserX, AlertCircle, Upload } from 'lucide-react';
 
 export const StudentsManagementPage = () => {
   const [students, setStudents] = useState([]);
@@ -11,6 +12,7 @@ export const StudentsManagementPage = () => {
   const [search, setSearch] = useState('');
   const [selectedClass, setSelectedClass] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
   const [modalLoading, setModalLoading] = useState(false);
   const [modalError, setModalError] = useState('');
 
@@ -109,12 +111,20 @@ export const StudentsManagementPage = () => {
           </p>
         </div>
 
-        <button
-          onClick={() => setIsModalOpen(true)}
-          className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white shadow-md shadow-indigo-500/20 hover:bg-indigo-700 transition"
-        >
-          <Plus className="h-4 w-4" /> Add New Student
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsCsvModalOpen(true)}
+            className="inline-flex items-center gap-2 rounded-xl border border-indigo-600 bg-indigo-50 px-3.5 py-2.5 text-xs font-bold text-indigo-700 hover:bg-indigo-100 transition dark:bg-indigo-950/40 dark:border-indigo-500 dark:text-indigo-300"
+          >
+            <Upload className="h-4 w-4" /> Import CSV
+          </button>
+          <button
+            onClick={() => setIsModalOpen(true)}
+            className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white shadow-md shadow-indigo-500/20 hover:bg-indigo-700 transition"
+          >
+            <Plus className="h-4 w-4" /> Add New Student
+          </button>
+        </div>
       </div>
 
       {/* Filter and Search Bar */}
@@ -331,6 +341,22 @@ export const StudentsManagementPage = () => {
           </div>
         </form>
       </Modal>
+
+      {/* CSV Bulk Import Modal */}
+      <CsvImportModal
+        isOpen={isCsvModalOpen}
+        onClose={() => setIsCsvModalOpen(false)}
+        title="Bulk Import Students via CSV"
+        description="Upload a CSV file containing students. New student user accounts, academic profiles, and class enrollments will be created automatically."
+        sampleHeaders={['full_name', 'email', 'roll_number', 'student_id', 'class_code', 'password']}
+        sampleRows={[
+          ['Aarav Sharma', '202501100088@mitaoe.ac.in', 'CS-201', '202501100088', 'CS-3', 'Student@123'],
+          ['Isha Patel', '202501100089@mitaoe.ac.in', 'CS-202', '202501100089', 'CS-3', 'Student@123'],
+        ]}
+        sampleFilename="students_import_template.csv"
+        onUpload={(formData) => adminApi.importStudentsCsv(formData)}
+        onSuccess={() => loadStudents()}
+      />
     </div>
   );
 };

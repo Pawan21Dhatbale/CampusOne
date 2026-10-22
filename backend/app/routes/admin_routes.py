@@ -8,11 +8,13 @@ from sqlalchemy import func
 from app.extensions import db
 from app.models.user import User, StudentProfile, FacultyProfile, ParentProfile, ParentStudentRelationship
 from app.models.academic import AcademicYear, Semester, Class, Subject, StudentEnrollment, FacultySubjectAssignment
-from app.models.timetable import TimetableEntry
+from app.models.timetable import TimetableEntry, LectureSwap
 from app.models.attendance import AttendanceSession, AttendanceRecord, AttendanceCorrectionRequest
 from app.models.system import AuditLog, SystemSetting
 from app.services.audit_service import AuditService
 from app.services.timetable_service import TimetableService
+from app.services.notification_service import NotificationService
+from app.utils.csv_helper import parse_csv_input, get_field_val
 from app.utils.decorators import role_required
 from app.utils.response import success_response, error_response
 from app.utils.validators import validate_prn_email, validate_mitaoe_email
@@ -962,3 +964,580 @@ def get_low_attendance_students():
         data={"low_attendance_students": low_attendance_list, "threshold": threshold},
         message=f"Found {len(low_attendance_list)} students with attendance below {threshold}%.",
     )
+
+
+# ==========================================
+# BULK CSV IMPORTS (STUDENTS, FACULTY, TIMETABLE)
+# ==========================================
+
+@admin_bp.route("/students/import-csv", methods=["POST"])
+@role_required("admin")
+def import_students_csv():
+    """
+    Imports students in bulk from a CSV file.
+    Expected headers: full_name, email, roll_number (optional), student_id/prn (optional), class_code (optional), password (optional)
+    """
+    rows, err = parse_csv_input(request)
+    if err:
+        return error_response(message=err, status_code=400)
+
+    imported_count = 0
+    skipped_count = 0
+    errors = []
+
+    curr_ay = AcademicYear.query.filter_by(is_current=True).first()
+    if not curr_ay:
+        curr_ay = AcademicYear.query.order_by(AcademicYear.id.desc()).first()
+
+    for row in rows:
+        line_num = row.get("_line_number", 0)
+        full_name = get_field_val(row, "full_name", "name", "student_name")
+        email = get_field_val(row, "email", "student_email").strip().lower()
+        roll_number = get_field_val(row, "roll_number", "roll_no", "rollno")
+        student_id = get_field_val(row, "student_id", "prn", "id")
+        class_str = get_field_val(row, "class_code", "class_name", "class", "code")
+        password = get_field_val(row, "password", default="Student@123")
+
+        if not full_name or not email:
+            errors.append(f"Row {line_num}: Missing full_name or email.")
+            skipped_count += 1
+            continue
+
+        is_testing = current_app.config.get("TESTING", False)
+        is_prn_valid, prn = validate_prn_email(email, is_testing=is_testing)
+        if is_prn_valid:
+            if not student_id:
+                student_id = prn
+            if not roll_number:
+                roll_number = prn
+        else:
+            if not student_id:
+                student_id = email.split("@")[0]
+            if not roll_number:
+                roll_number = student_id
+
+        # Check existing user
+        if User.query.filter(User.email.ilike(email)).first():
+            errors.append(f"Row {line_num}: Account with email '{email}' already exists.")
+            skipped_count += 1
+            continue
+
+        # Check existing student ID
+        if StudentProfile.query.filter_by(student_id=student_id).first():
+            errors.append(f"Row {line_num}: Student ID / PRN '{student_id}' is already registered.")
+            skipped_count += 1
+            continue
+
+        # Resolve Class
+        class_id = None
+        if class_str:
+            cls = Class.query.filter(
+                (Class.code.ilike(class_str)) | (Class.name.ilike(class_str))
+            ).first()
+            if cls:
+                class_id = cls.id
+            else:
+                errors.append(f"Row {line_num} Warning: Class '{class_str}' not found. Student created without class assignment.")
+
+        try:
+            user = User(
+                full_name=full_name,
+                email=email,
+                username=student_id.lower(),
+                role="student",
+                is_active=True,
+            )
+            user.set_password(password)
+            db.session.add(user)
+            db.session.flush()
+
+            profile = StudentProfile(
+                user_id=user.id,
+                student_id=student_id,
+                roll_number=roll_number,
+                class_id=class_id,
+                admission_date=date.today(),
+            )
+            db.session.add(profile)
+            db.session.flush()
+
+            if class_id and curr_ay:
+                enr = StudentEnrollment(
+                    student_id=profile.id,
+                    class_id=class_id,
+                    academic_year_id=curr_ay.id,
+                    enrollment_date=date.today(),
+                    status="ACTIVE",
+                )
+                db.session.add(enr)
+
+            imported_count += 1
+        except Exception as e:
+            errors.append(f"Row {line_num}: Error creating student: {str(e)}")
+            skipped_count += 1
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return error_response(message=f"Database commit error: {str(e)}", status_code=500)
+
+    AuditService.log(
+        action="STUDENTS_CSV_IMPORTED",
+        user_id=current_user.id,
+        entity_type="StudentProfile",
+        details={"imported": imported_count, "skipped": skipped_count}
+    )
+
+    return success_response(
+        data={
+            "imported_count": imported_count,
+            "skipped_count": skipped_count,
+            "errors": errors,
+            "total_rows": len(rows),
+        },
+        message=f"Student CSV import processed: {imported_count} imported, {skipped_count} skipped.",
+        status_code=201 if imported_count > 0 else 200
+    )
+
+
+@admin_bp.route("/faculty/import-csv", methods=["POST"])
+@role_required("admin")
+def import_faculty_csv():
+    """
+    Imports faculty members in bulk from a CSV file.
+    Expected headers: full_name, email, faculty_id (optional), department (optional), designation (optional), phone (optional), password (optional)
+    """
+    rows, err = parse_csv_input(request)
+    if err:
+        return error_response(message=err, status_code=400)
+
+    imported_count = 0
+    skipped_count = 0
+    errors = []
+
+    for row in rows:
+        line_num = row.get("_line_number", 0)
+        full_name = get_field_val(row, "full_name", "name", "faculty_name")
+        email = get_field_val(row, "email", "faculty_email").strip().lower()
+        faculty_id = get_field_val(row, "faculty_id", "emp_id", "employee_id", "id")
+        department = get_field_val(row, "department", "dept", default="Computer Science")
+        designation = get_field_val(row, "designation", default="Assistant Professor")
+        phone = get_field_val(row, "phone", "contact", "mobile", default="")
+        password = get_field_val(row, "password", default="Faculty@123")
+
+        if not full_name or not email:
+            errors.append(f"Row {line_num}: Missing full_name or email.")
+            skipped_count += 1
+            continue
+
+        if not faculty_id:
+            local = email.split("@")[0].upper()[:8]
+            faculty_id = f"FAC{local}"
+
+        if User.query.filter(User.email.ilike(email)).first():
+            errors.append(f"Row {line_num}: Account with email '{email}' already exists.")
+            skipped_count += 1
+            continue
+
+        if FacultyProfile.query.filter_by(faculty_id=faculty_id).first():
+            errors.append(f"Row {line_num}: Faculty ID '{faculty_id}' is already registered.")
+            skipped_count += 1
+            continue
+
+        try:
+            user = User(
+                full_name=full_name,
+                email=email,
+                username=faculty_id.lower(),
+                role="faculty",
+                is_active=True,
+            )
+            user.set_password(password)
+            db.session.add(user)
+            db.session.flush()
+
+            faculty = FacultyProfile(
+                user_id=user.id,
+                faculty_id=faculty_id,
+                department=department,
+                designation=designation,
+                phone=phone,
+            )
+            db.session.add(faculty)
+            imported_count += 1
+        except Exception as e:
+            errors.append(f"Row {line_num}: Error creating faculty: {str(e)}")
+            skipped_count += 1
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return error_response(message=f"Database commit error: {str(e)}", status_code=500)
+
+    AuditService.log(
+        action="FACULTY_CSV_IMPORTED",
+        user_id=current_user.id,
+        entity_type="FacultyProfile",
+        details={"imported": imported_count, "skipped": skipped_count}
+    )
+
+    return success_response(
+        data={
+            "imported_count": imported_count,
+            "skipped_count": skipped_count,
+            "errors": errors,
+            "total_rows": len(rows),
+        },
+        message=f"Faculty CSV import processed: {imported_count} imported, {skipped_count} skipped.",
+        status_code=201 if imported_count > 0 else 200
+    )
+
+
+@admin_bp.route("/timetable/import-csv", methods=["POST"])
+@role_required("admin")
+def import_timetable_csv():
+    """
+    Imports institutional timetable entries from CSV.
+    Expected headers: class_code, subject_code, faculty_email/faculty_id/faculty_name, day_of_week, start_time, end_time, room_number
+    """
+    rows, err = parse_csv_input(request)
+    if err:
+        return error_response(message=err, status_code=400)
+
+    valid_days = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday"}
+    imported_count = 0
+    skipped_count = 0
+    errors = []
+
+    for row in rows:
+        line_num = row.get("_line_number", 0)
+        class_str = get_field_val(row, "class_code", "class_name", "class", "code")
+        subject_str = get_field_val(row, "subject_code", "subject_name", "subject")
+        faculty_str = get_field_val(row, "faculty_email", "faculty_name", "faculty_id", "faculty", "teacher")
+        day_raw = get_field_val(row, "day_of_week", "day")
+        start_time_str = get_field_val(row, "start_time", "start")
+        end_time_str = get_field_val(row, "end_time", "end")
+        room_number = get_field_val(row, "room_number", "room", default="Room 101")
+
+        if not class_str or not subject_str or not faculty_str or not day_raw or not start_time_str or not end_time_str:
+            errors.append(f"Row {line_num}: Missing required fields (class, subject, faculty, day, start_time, end_time).")
+            skipped_count += 1
+            continue
+
+        day_of_week = day_raw.capitalize()
+        if day_of_week.lower() not in valid_days:
+            errors.append(f"Row {line_num}: Invalid day of week '{day_raw}'. Must be Monday through Saturday.")
+            skipped_count += 1
+            continue
+
+        # Resolve Class
+        cls = Class.query.filter(
+            (Class.code.ilike(class_str)) | (Class.name.ilike(class_str))
+        ).first()
+        if not cls:
+            errors.append(f"Row {line_num}: Class '{class_str}' was not found in database.")
+            skipped_count += 1
+            continue
+
+        # Resolve Subject
+        sub = Subject.query.filter(
+            (Subject.code.ilike(subject_str)) | (Subject.name.ilike(subject_str))
+        ).first()
+        if not sub:
+            errors.append(f"Row {line_num}: Subject '{subject_str}' was not found in database.")
+            skipped_count += 1
+            continue
+
+        # Resolve Faculty
+        fac = FacultyProfile.query.join(FacultyProfile.user).filter(
+            (User.email.ilike(faculty_str)) |
+            (FacultyProfile.faculty_id.ilike(faculty_str)) |
+            (User.full_name.ilike(faculty_str))
+        ).first()
+        if not fac:
+            errors.append(f"Row {line_num}: Faculty '{faculty_str}' was not found in database.")
+            skipped_count += 1
+            continue
+
+        # Conflict check
+        valid, conflict_msg = TimetableService.check_conflict(
+            day_of_week=day_of_week,
+            start_time_val=start_time_str,
+            end_time_val=end_time_str,
+            class_id=cls.id,
+            faculty_id=fac.id,
+            room_number=room_number,
+        )
+        if not valid:
+            errors.append(f"Row {line_num}: {conflict_msg}")
+            skipped_count += 1
+            continue
+
+        start = TimetableService.parse_time(start_time_str)
+        end = TimetableService.parse_time(end_time_str)
+
+        try:
+            entry = TimetableEntry(
+                class_id=cls.id,
+                subject_id=sub.id,
+                faculty_id=fac.id,
+                day_of_week=day_of_week,
+                start_time=start,
+                end_time=end,
+                room_number=room_number,
+                is_active=True,
+                status="published",
+            )
+            db.session.add(entry)
+            imported_count += 1
+        except Exception as e:
+            errors.append(f"Row {line_num}: Unexpected error adding entry: {str(e)}")
+            skipped_count += 1
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return error_response(message=f"Database commit error: {str(e)}", status_code=500)
+
+    AuditService.log(
+        action="TIMETABLE_CSV_IMPORTED",
+        user_id=current_user.id,
+        entity_type="TimetableEntry",
+        details={"imported": imported_count, "skipped": skipped_count}
+    )
+
+    return success_response(
+        data={
+            "imported_count": imported_count,
+            "skipped_count": skipped_count,
+            "errors": errors,
+            "total_rows": len(rows),
+        },
+        message=f"Timetable CSV import processed: {imported_count} lectures imported, {skipped_count} skipped.",
+        status_code=201 if imported_count > 0 else 200
+    )
+
+
+# ==========================================
+# LECTURE SWAPS & TIMETABLE FACULTY SWAP (ADMIN)
+# ==========================================
+
+@admin_bp.route("/swaps", methods=["GET"])
+@role_required("admin")
+def list_all_swaps():
+    """Lists all lecture swaps and substitutions across the institution."""
+    status = request.args.get("status")
+    date_str = request.args.get("date")
+    faculty_id = request.args.get("faculty_id", type=int)
+
+    query = LectureSwap.query
+
+    if status:
+        query = query.filter_by(status=status.upper())
+    if date_str:
+        try:
+            target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            query = query.filter_by(target_date=target_date)
+        except ValueError:
+            pass
+    if faculty_id:
+        query = query.filter(
+            (LectureSwap.requesting_faculty_id == faculty_id) |
+            (LectureSwap.substitute_faculty_id == faculty_id)
+        )
+
+    swaps = query.order_by(LectureSwap.target_date.desc(), LectureSwap.created_at.desc()).all()
+    return success_response(
+        data={"swaps": [s.to_dict() for s in swaps]},
+        message="Institution lecture swaps retrieved successfully."
+    )
+
+
+@admin_bp.route("/swaps", methods=["POST"])
+@role_required("admin")
+def admin_create_swap():
+    """
+    Administrator directly assigns a substitute teacher for any lecture.
+    Immediate approval (status='ACCEPTED') by default.
+    """
+    data = request.get_json() or {}
+    timetable_entry_id = data.get("timetable_entry_id")
+    substitute_faculty_id = data.get("substitute_faculty_id")
+    target_date_str = data.get("target_date")
+    reason = (data.get("reason") or "Administrative Reassignment / Substitution").strip()
+    notes = data.get("notes")
+    status = (data.get("status") or "ACCEPTED").upper()
+
+    if not timetable_entry_id or not substitute_faculty_id or not target_date_str:
+        return error_response(
+            message="Timetable entry, substitute faculty, and target date are required.",
+            status_code=400
+        )
+
+    entry = TimetableEntry.query.get(timetable_entry_id)
+    if not entry:
+        return error_response(message="Timetable entry not found.", status_code=404)
+
+    substitute = FacultyProfile.query.get(substitute_faculty_id)
+    if not substitute:
+        return error_response(message="Substitute faculty not found.", status_code=404)
+
+    try:
+        target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return error_response(message="Invalid target date format. Expected YYYY-MM-DD.", status_code=400)
+
+    swap = LectureSwap(
+        timetable_entry_id=entry.id,
+        requesting_faculty_id=entry.faculty_id,
+        substitute_faculty_id=substitute.id,
+        target_date=target_date,
+        reason=reason,
+        notes=notes,
+        status=status,
+    )
+    db.session.add(swap)
+    db.session.commit()
+
+    if substitute.user_id:
+        NotificationService.notify(
+            user_id=substitute.user_id,
+            title="Lecture Substitution Assigned",
+            message=f"Administrator has assigned you as substitute for {entry.subject.name if entry.subject else 'a lecture'} on {target_date_str}.",
+            notification_type="LECTURE_SWAP_ASSIGNED",
+            data={"swap_id": swap.id}
+        )
+
+    AuditService.log(
+        action="ADMIN_LECTURE_SWAP_CREATED",
+        user_id=current_user.id,
+        entity_type="LectureSwap",
+        entity_id=swap.id,
+        details={"status": status, "substitute_id": substitute.id, "entry_id": entry.id}
+    )
+
+    return success_response(
+        data={"swap": swap.to_dict()},
+        message="Lecture substitution assigned successfully.",
+        status_code=201
+    )
+
+
+@admin_bp.route("/swaps/<int:id>/status", methods=["PUT"])
+@role_required("admin")
+def admin_update_swap_status(id):
+    """Administrator approves, rejects, or updates the status of any swap request."""
+    swap = LectureSwap.query.get(id)
+    if not swap:
+        return error_response(message="Lecture swap request not found.", status_code=404)
+
+    data = request.get_json() or {}
+    new_status = (data.get("status") or "").upper().strip()
+    notes = data.get("notes")
+
+    if new_status not in ["ACCEPTED", "REJECTED", "CANCELLED", "PENDING"]:
+        return error_response(message="Invalid status. Must be ACCEPTED, REJECTED, CANCELLED, or PENDING.", status_code=400)
+
+    swap.status = new_status
+    if notes:
+        swap.notes = (swap.notes or "") + f" [Admin: {notes}]"
+
+    db.session.commit()
+
+    if swap.requesting_faculty and swap.requesting_faculty.user_id:
+        NotificationService.notify(
+            user_id=swap.requesting_faculty.user_id,
+            title="Lecture Swap Updated by Admin",
+            message=f"Admin updated swap status to {new_status} for {swap.timetable_entry.subject.name if swap.timetable_entry and swap.timetable_entry.subject else 'your lecture'} on {swap.target_date.isoformat()}.",
+            notification_type="ADMIN_SWAP_UPDATE",
+            data={"swap_id": swap.id, "status": new_status}
+        )
+
+    return success_response(
+        data={"swap": swap.to_dict()},
+        message=f"Swap request status updated to {new_status}."
+    )
+
+
+@admin_bp.route("/swaps/<int:id>", methods=["DELETE"])
+@role_required("admin")
+def admin_delete_swap(id):
+    """Administrator permanently removes a lecture swap record."""
+    swap = LectureSwap.query.get(id)
+    if not swap:
+        return error_response(message="Lecture swap not found.", status_code=404)
+
+    db.session.delete(swap)
+    db.session.commit()
+    return success_response(message="Lecture swap record deleted successfully.")
+
+
+@admin_bp.route("/timetable/swap-faculty", methods=["POST"])
+@role_required("admin")
+def swap_timetable_faculty():
+    """
+    Permanently reassigns or swaps faculty members between timetable entries.
+    Mode 1 (Reassign): { "entry_id": 12, "new_faculty_id": 5 }
+    Mode 2 (Mutual swap): { "entry_id_1": 12, "entry_id_2": 15 }
+    """
+    data = request.get_json() or {}
+    entry_id_1 = data.get("entry_id_1") or data.get("entry_id")
+    entry_id_2 = data.get("entry_id_2")
+    new_faculty_id = data.get("new_faculty_id")
+
+    if not entry_id_1:
+        return error_response(message="Timetable entry ID is required.", status_code=400)
+
+    e1 = TimetableEntry.query.get(entry_id_1)
+    if not e1:
+        return error_response(message="First timetable entry not found.", status_code=404)
+
+    if entry_id_2:
+        e2 = TimetableEntry.query.get(entry_id_2)
+        if not e2:
+            return error_response(message="Second timetable entry not found.", status_code=404)
+
+        fac1 = e1.faculty_id
+        fac2 = e2.faculty_id
+        e1.faculty_id = fac2
+        e2.faculty_id = fac1
+        db.session.commit()
+
+        AuditService.log(
+            action="TIMETABLE_FACULTY_SWAPPED",
+            user_id=current_user.id,
+            entity_type="TimetableEntry",
+            entity_id=e1.id,
+            details={"swapped_with": e2.id, "fac1": fac1, "fac2": fac2}
+        )
+        return success_response(
+            data={"entry_1": e1.to_dict(), "entry_2": e2.to_dict()},
+            message=f"Faculty swapped successfully between {e1.subject.code if e1.subject else ''} and {e2.subject.code if e2.subject else ''}."
+        )
+
+    elif new_faculty_id:
+        fac = FacultyProfile.query.get(new_faculty_id)
+        if not fac:
+            return error_response(message="Faculty member not found.", status_code=404)
+
+        old_fac_id = e1.faculty_id
+        e1.faculty_id = fac.id
+        db.session.commit()
+
+        AuditService.log(
+            action="TIMETABLE_FACULTY_REASSIGNED",
+            user_id=current_user.id,
+            entity_type="TimetableEntry",
+            entity_id=e1.id,
+            details={"old_faculty_id": old_fac_id, "new_faculty_id": fac.id}
+        )
+        return success_response(
+            data={"entry": e1.to_dict()},
+            message=f"Faculty reassigned successfully to {fac.user.full_name if fac.user else ''}."
+        )
+    else:
+        return error_response(message="Either 'new_faculty_id' or 'entry_id_2' must be provided.", status_code=400)
+

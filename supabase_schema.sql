@@ -324,3 +324,25 @@ VALUES
     ('MIN_ATTENDANCE_WARNING_THRESHOLD', '75.0', 'Minimum required attendance percentage'),
     ('EXCELLENT_ATTENDANCE_THRESHOLD', '85.0', 'Distinction attendance threshold')
 ON CONFLICT (key) DO NOTHING;
+
+-- 18. LECTURE SWAPS / SUBSTITUTIONS
+CREATE TABLE IF NOT EXISTS lecture_swaps (
+    id SERIAL PRIMARY KEY,
+    timetable_entry_id INTEGER NOT NULL REFERENCES timetable_entries(id) ON DELETE CASCADE,
+    requesting_faculty_id INTEGER NOT NULL REFERENCES faculty_profiles(id) ON DELETE CASCADE,
+    substitute_faculty_id INTEGER NOT NULL REFERENCES faculty_profiles(id) ON DELETE CASCADE,
+    target_date DATE NOT NULL,
+    target_timetable_entry_id INTEGER REFERENCES timetable_entries(id) ON DELETE SET NULL,
+    target_swap_date DATE,
+    reason VARCHAR(255),
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING', -- 'PENDING', 'ACCEPTED', 'REJECTED', 'CANCELLED'
+    notes TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_lecture_swaps_entry ON lecture_swaps(timetable_entry_id);
+CREATE INDEX IF NOT EXISTS idx_lecture_swaps_req_faculty ON lecture_swaps(requesting_faculty_id);
+CREATE INDEX IF NOT EXISTS idx_lecture_swaps_sub_faculty ON lecture_swaps(substitute_faculty_id);
+CREATE INDEX IF NOT EXISTS idx_lecture_swaps_date ON lecture_swaps(target_date);
+

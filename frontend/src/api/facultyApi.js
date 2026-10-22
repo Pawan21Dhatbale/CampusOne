@@ -8,4 +8,17 @@ export const facultyApi = {
   getLectureAttendance: (lectureId, dateStr) => axiosClient.get(`/faculty/lectures/${lectureId}/attendance`, { params: { date: dateStr } }),
   requestCorrection: (payload) => axiosClient.post('/faculty/attendance-corrections', payload),
   getHistory: () => axiosClient.get('/faculty/history'),
+
+  // Lecture Swaps & Substitutions
+  getSwaps: () => axiosClient.get('/faculty/swaps'),
+  requestSwap: (payload) => axiosClient.post('/faculty/swaps', payload),
+  respondToSwap: (id, payload) => axiosClient.put(`/faculty/swaps/${id}/respond`, payload),
+  cancelSwap: (id) => axiosClient.delete(`/faculty/swaps/${id}`),
+  getColleagues: () => axiosClient.get('/faculty/colleagues'),
+
+  // Timetable CSV Import
+  importTimetableCsv: (formData) => axiosClient.post('/faculty/timetable/import-csv', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
 };
+

@@ -26,6 +26,24 @@ export const adminApi = {
   getTimetable: (params) => axiosClient.get('/admin/timetable', { params }),
   createTimetableEntry: (payload) => axiosClient.post('/admin/timetable', payload),
   deactivateTimetableEntry: (id) => axiosClient.delete(`/admin/timetable/${id}`),
+  swapTimetableFaculty: (payload) => axiosClient.post('/admin/timetable/swap-faculty', payload),
+
+  // Bulk CSV Imports
+  importStudentsCsv: (formData) => axiosClient.post('/admin/students/import-csv', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
+  importFacultyCsv: (formData) => axiosClient.post('/admin/faculty/import-csv', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
+  importTimetableCsv: (formData) => axiosClient.post('/admin/timetable/import-csv', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
+
+  // Lecture Swaps & Substitutions
+  getSwaps: (params) => axiosClient.get('/admin/swaps', { params }),
+  createSwap: (payload) => axiosClient.post('/admin/swaps', payload),
+  updateSwapStatus: (id, payload) => axiosClient.put(`/admin/swaps/${id}/status`, payload),
+  deleteSwap: (id) => axiosClient.delete(`/admin/swaps/${id}`),
 
   // Attendance Records & Exports
   getAttendanceSessions: (params) => axiosClient.get('/admin/attendance/sessions', { params }),
@@ -36,3 +54,4 @@ export const adminApi = {
   getSettings: () => axiosClient.get('/admin/settings'),
   updateSetting: (payload) => axiosClient.put('/admin/settings', payload),
 };
+
